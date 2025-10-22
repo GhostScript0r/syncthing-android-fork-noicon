@@ -58,21 +58,31 @@ def get_min_sdk(project_dir):
     fail('Failed to find min-sdk')
 
 def which_raw(program):
-    import os
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+    import subprocess
+    import sys
 
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
+    if sys.platform == 'win32':
+        try:
+            output = subprocess.check_output(['where', program], stderr=subprocess.DEVNULL, text=True)
+            return output.strip().splitlines()[0]  # Return the first match
+        except subprocess.CalledProcessError:
+            return None
     else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
+        import os
+        def is_exe(fpath):
+            return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
 
-    return None
+        fpath, fname = os.path.split(program)
+        if fpath:
+            if is_exe(program):
+                return program
+        else:
+            for path in os.environ["PATH"].split(os.pathsep):
+                exe_file = os.path.join(path, program)
+                if is_exe(exe_file):
+                    return exe_file
+
+        return None
 
 def which(program):
     if (sys.platform == 'win32'):
@@ -260,24 +270,56 @@ def write_file(fullfn, text):
     with open(fullfn, 'w') as hFile:
         hFile.write(text + '\n')
 
+def find_android_ndk():
+    if sys.platform == 'win32':
+        sdk_base = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Android', 'Sdk')
+    else:
+        sdk_base = os.environ.get('ANDROID_HOME', '')
+
+    if not sdk_base or not os.path.isdir(sdk_base):
+        print(f"Android SDK base not found at: {sdk_base}")
+        return None, None
+
+    ndk_dir = os.path.join(sdk_base, 'ndk')
+    if not os.path.isdir(ndk_dir):
+        print(f"NDK directory not found at: {ndk_dir}")
+        return None, None
+
+    try:
+        versions = [
+            d for d in os.listdir(ndk_dir)
+            if os.path.isdir(os.path.join(ndk_dir, d)) and d[0].isdigit()
+        ]
+        if not versions:
+            print("No NDK versions found.")
+            return None, None
+
+        from packaging.version import Version
+        latest = sorted(versions, key=Version, reverse=True)[0]
+        ndk_path = os.path.join(ndk_dir, latest)
+        return latest, ndk_path
+    except Exception as e:
+        print(f"Error while detecting NDK version: {e}")
+        return None, None
 
 def get_ndk_ready():
     if os.environ.get('ANDROID_NDK_HOME', ''):
         return
-    ndk_env_vars_defined = True
-    if not os.environ.get('NDK_VERSION', ''):
-        print('NDK_VERSION is NOT defined.')
-        ndk_env_vars_defined = False
-    if not os.environ.get('ANDROID_HOME', ''):
-        print('ANDROID_HOME is NOT defined.')
-        ndk_env_vars_defined = False
-    if not ndk_env_vars_defined:
-        fail('Error: ANDROID_NDK_HOME or NDK_VERSION and ANDROID_HOME environment variable must be defined.')
-        return
-    os.environ["ANDROID_NDK_HOME"] = os.path.join(os.environ['ANDROID_HOME'], 'ndk', os.environ['NDK_VERSION'])
-    return
 
+    ndk_version = os.environ.get('NDK_VERSION', '')
+    android_home = os.environ.get('ANDROID_HOME', '')
 
+    if not ndk_version or not android_home:
+        # Try to auto-detect both
+        detected_version, detected_path = find_android_ndk()
+        if not detected_version or not detected_path:
+            fail('Error: ANDROID_NDK_HOME or NDK_VERSION and ANDROID_HOME environment variable must be defined.')
+            return
+
+        os.environ['NDK_VERSION'] = detected_version
+        os.environ['ANDROID_NDK_HOME'] = detected_path
+    else:
+        os.environ['ANDROID_NDK_HOME'] = os.path.join(android_home, 'ndk', ndk_version)
 #
 # BUILD SCRIPT MAIN.
 #
@@ -381,7 +423,7 @@ if check_and_copy_prebuilt_libraries():
     sys.exit(0)
 
 # Check if go is available.
-go_bin = which("go");
+go_bin = which("go")
 if not go_bin:
     fail('Error: go is not available on the PATH. Please install go to build go itself.')
 
@@ -415,7 +457,7 @@ subprocess.check_call([
 subprocess.check_call([go_bin, 'env', '-w', 'GOFLAGS=-buildvcs=false'], cwd=syncthing_dir)
 
 if FORCE_DISPLAY_SYNCTHING_VERSION:
-    syncthingVersion = FORCE_DISPLAY_SYNCTHING_VERSION.replace("rc", "preview");
+    syncthingVersion = FORCE_DISPLAY_SYNCTHING_VERSION.replace("rc", "preview")
 else:
     print('Invoking git describe ...')
     syncthingVersion = subprocess.check_output([
@@ -425,10 +467,10 @@ else:
         'describe',
         '--always'
     ]).strip();
-    syncthingVersion = syncthingVersion.decode().replace("rc", "preview");
+    syncthingVersion = syncthingVersion.decode().replace("rc", "preview")
 
-print('Building syncthing version', syncthingVersion);
-print('SOURCE_DATE_EPOCH=[' + os.environ['SOURCE_DATE_EPOCH'] + ']');
+print('Building syncthing version', syncthingVersion)
+print('SOURCE_DATE_EPOCH=[' + os.environ.get('SOURCE_DATE_EPOCH', 'undefined') + ']')
 for target in BUILD_TARGETS:
     print('')
     print('*** Building for', target['arch'])

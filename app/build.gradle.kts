@@ -1,3 +1,4 @@
+
 plugins {
     alias(libs.plugins.aboutLibraries)
     alias(libs.plugins.android.application)
